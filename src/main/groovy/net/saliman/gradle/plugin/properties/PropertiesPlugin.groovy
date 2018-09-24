@@ -20,6 +20,10 @@ import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.initialization.Settings
 import org.gradle.api.plugins.PluginAware
+import org.gradle.cache.internal.filelock.LockFileAccess
+import org.gradle.cache.internal.filelock.LockStateAccess
+import org.gradle.cache.internal.filelock.Version1LockStateSerializer
+import org.gradle.initialization.DefaultSettings
 import org.slf4j.LoggerFactory
 
 /**
@@ -172,6 +176,14 @@ class PropertiesPlugin implements Plugin<PluginAware> {
 		}
 	}
 
+	private static boolean isBuildSrc(pluginAware) {
+		(
+			pluginAware instanceof Settings && pluginAware.settingsDir.name == DefaultSettings.DEFAULT_BUILD_SRC_DIR ||
+			pluginAware instanceof Project && pluginAware.projectDir.name == DefaultSettings.DEFAULT_BUILD_SRC_DIR
+		) &&
+		new LockFileAccess(pluginAware.file('.gradle/noVersion/buildSrc.lock'), new LockStateAccess(new Version1LockStateSerializer())).readLockInfo().lockId != 0
+	}
+
 	/**
 	 * Private method that does the actual work of applying the plugin.
 	 * @param pluginAware the project or settings object to which we are applying
@@ -250,12 +262,11 @@ class PropertiesPlugin implements Plugin<PluginAware> {
 			// location.  gradle.properties must come from the project itself.
 			def fileDir = p.projectDir
 			if ( envFileDir != '.') {
-				fileDir = "${fileDir}/${envFileDir}"
+				fileDir = fileDir.toPath().resolve(envFileDir).toFile() // TOTEST
 				// Make sure the directory actually exists...
-				File d = new File(fileDir)
-				def exists = d.exists()
-				def isDirectory = d.isDirectory()
-				def isReadable = d.canRead()
+				def exists = fileDir.exists()
+				def isDirectory = fileDir.isDirectory()
+				def isReadable = fileDir.canRead()
 				if ( !exists || !isDirectory || !isReadable ) {
 					throw new FileNotFoundException("Environment File directory '$envFileDir' does not exist, or is not a readable directory")
 				}
@@ -266,8 +277,12 @@ class PropertiesPlugin implements Plugin<PluginAware> {
 			// properties is entirely dependent on whether the project whose
 			// files we're currently processing is the root project.
 			def processSystemProperties = (p == project.rootProject)
+
 			files.add(0, new PropertyFile("${fileDir}/gradle-${envName}.properties", FileType.ENVIRONMENT, processSystemProperties))
 			files.add(0, new PropertyFile("${p.projectDir}/gradle.properties", FileType.OPTIONAL, processSystemProperties))
+			if (isBuildSrc(project)) {
+				files.add(0, new PropertyFile("${p.projectDir.parent}/gradle.properties", FileType.OPTIONAL, processSystemProperties))
+			}
 			p = p.parent
 		}
 		return addCommonPropertyFileList(project, files)
@@ -284,12 +299,11 @@ class PropertiesPlugin implements Plugin<PluginAware> {
 	private buildPropertyFileListFromSettings(settings, envFileDir, envName) {
 		def fileDir = settings.settingsDir
 		if ( envFileDir != '.') {
-			fileDir = "${fileDir}/${envFileDir}"
 			// Make sure the directory actually exists...
-			File d = new File(fileDir)
-			def exists = d.exists()
-			def isDirectory = d.isDirectory()
-			def isReadable = d.canRead()
+			fileDir = fileDir.toPath().resolve(envFileDir).toFile() // TOTEST
+			def exists = fileDir.exists()
+			def isDirectory = fileDir.isDirectory()
+			def isReadable = fileDir.canRead()
 			if ( !exists || !isDirectory || !isReadable ) {
 				throw new FileNotFoundException("Environment File directory '$envFileDir' does not exist, or is not a readable directory")
 			}
@@ -298,6 +312,9 @@ class PropertiesPlugin implements Plugin<PluginAware> {
 		def files = []
 		files.add(new PropertyFile("${settings.settingsDir}/gradle.properties", FileType.OPTIONAL, true))
 		files.add(new PropertyFile("${fileDir}/gradle-${envName}.properties", FileType.ENVIRONMENT, true))
+		if (isBuildSrc(settings)) {
+			files.add(new PropertyFile("${p.settingsDir.parent}/gradle.properties", FileType.OPTIONAL, true))
+		}
 		return addCommonPropertyFileList(settings, files)
 	}
 
